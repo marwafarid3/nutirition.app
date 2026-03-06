@@ -1,141 +1,162 @@
-import os
 import streamlit as st
-from dotenv import load_dotenv
+import pandas as pd
+from PIL import Image
+import os
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+# ================================
+# LangChain Imports
+# ================================
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain.vectorstores import FAISS
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.schema import Document
+from langchain.chains import RetrievalQA
 
-# ======================
-# LOAD API KEY
-# ======================
+# ================================
+# Gemini API Key
+# ================================
+os.environ["GOOGLE_API_KEY"] = "AIzaSyAFcvpt-Fs_muflBT96HNZbw4c_9Axa0ik"
 
-load_dotenv()
-API_KEY = os.getenv("AIzaSyAFcvpt-Fs_muflBT96HNZbw4c_9Axa0ik")
-
-# ======================
-# GEMINI MODEL
-# ======================
-
+# ================================
+# LLM
+# ================================
 llm = ChatGoogleGenerativeAI(
-    model="gemini-pro",
-    google_api_key=API_KEY,
-    temperature=0.2
+    model="gemini-1.5-flash",
+    temperature=0.3
 )
 
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/embedding-001",
-    google_api_key=API_KEY
-)
-
-# ======================
-# NUTRITION KNOWLEDGE
-# ======================
-
-knowledge = [
-"Protein should be about 30% of daily calories",
-"Fat should be about 25% of daily calories",
-"Carbohydrates should be about 45% of daily calories",
-"TDEE equals BMR multiplied by activity level",
-"Weight loss requires calorie deficit"
+# ================================
+# Nutrition Knowledge Base (RAG)
+# ================================
+nutrition_data = [
+    "Protein sources include chicken, fish, eggs, beans and yogurt.",
+    "Healthy carbs include oats, brown rice, sweet potatoes and quinoa.",
+    "Healthy fats include avocado, olive oil and nuts.",
+    "For weight loss create a calorie deficit.",
+    "Drink at least 2 liters of water daily.",
+    "Vegetables like broccoli and spinach are low calorie and high nutrients.",
+    "Eating protein helps muscle growth.",
+    "Avoid excessive sugar and processed foods."
 ]
 
-vectorstore = FAISS.from_texts(knowledge, embeddings)
+docs = [Document(page_content=text) for text in nutrition_data]
 
-# ======================
-# CALCULATIONS
-# ======================
+splitter = CharacterTextSplitter(chunk_size=100, chunk_overlap=0)
+chunks = splitter.split_documents(docs)
 
-def calculate_bmr(weight, height, age, gender):
+embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 
-    if gender == "male":
-        return (10*weight)+(6.25*height)-(5*age)+5
+vectorstore = FAISS.from_documents(chunks, embeddings)
+
+retriever = vectorstore.as_retriever()
+
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=retriever
+)
+
+# ================================
+# Streamlit UI
+# ================================
+st.title("🥗 Nutrition AI Agent")
+
+# ================================
+# User Profile
+# ================================
+st.sidebar.header("User Profile")
+
+weight = st.sidebar.number_input("Weight (kg)", 40, 200)
+height = st.sidebar.number_input("Height (cm)", 140, 210)
+age = st.sidebar.number_input("Age", 10, 80)
+goal = st.sidebar.selectbox("Goal", ["Lose Weight", "Maintain", "Gain Muscle"])
+
+# ================================
+# Calorie Calculation
+# ================================
+def calculate_calories(weight, height, age):
+
+    bmr = 10*weight + 6.25*height - 5*age + 5
+
+    if goal == "Lose Weight":
+        calories = bmr - 400
+    elif goal == "Gain Muscle":
+        calories = bmr + 300
     else:
-        return (10*weight)+(6.25*height)-(5*age)-161
+        calories = bmr
 
-def activity_factor(level):
+    return int(calories)
 
-    factors={
-        "low":1.2,
-        "medium":1.55,
-        "high":1.9
-    }
+if st.sidebar.button("🔥 Calculate Calories"):
+    cals = calculate_calories(weight, height, age)
+    st.sidebar.success(f"Daily Calories: {cals}")
 
-    return factors[level]
+# ================================
+# Diet Plan Generator
+# ================================
+st.header("🥗 Generate Diet Plan")
 
-# ======================
-# UI
-# ======================
+if st.button("Generate Plan"):
 
-st.title("🥗 AI Nutrition Planner")
+    prompt = f"""
+    Create a healthy diet plan.
 
-tab1,tab2=st.tabs(["Diet Generator","Nutrition Chat"])
+    Weight: {weight}
+    Height: {height}
+    Age: {age}
+    Goal: {goal}
 
-# ======================
-# DIET GENERATOR
-# ======================
+    Include breakfast lunch dinner snacks.
+    """
 
-with tab1:
+    response = llm.invoke(prompt)
 
-    goal=st.selectbox("Goal",["weight loss","muscle gain","maintenance"])
+    st.write(response.content)
 
-    weight=st.number_input("Weight",40,200)
+# ================================
+# Food Image Analysis
+# ================================
+st.header("📷 Analyze Food Image")
 
-    height=st.number_input("Height",120,220)
+uploaded_file = st.file_uploader("Upload food image")
 
-    age=st.number_input("Age",10,80)
+if uploaded_file:
 
-    gender=st.selectbox("Gender",["male","female"])
+    image = Image.open(uploaded_file)
+    st.image(image)
 
-    activity=st.selectbox("Activity",["low","medium","high"])
+    prompt = "Describe this food and estimate calories."
 
-    if st.button("Generate Diet Plan"):
+    response = llm.invoke([prompt, image])
 
-        bmr=calculate_bmr(weight,height,age,gender)
+    st.write(response.content)
 
-        tdee=bmr*activity_factor(activity)
+# ================================
+# Weight Tracking
+# ================================
+st.header("📊 Weight Tracker")
 
-        prompt=f"""
-        Create a scientific 7 day diet plan.
+if "weights" not in st.session_state:
+    st.session_state.weights = []
 
-        Goal: {goal}
-        BMR: {bmr}
-        TDEE: {tdee}
-        """
+new_weight = st.number_input("Enter today's weight")
 
-        result=llm.invoke(prompt)
+if st.button("Add Weight"):
+    st.session_state.weights.append(new_weight)
 
-        st.subheader("Your Metrics")
+df = pd.DataFrame(st.session_state.weights, columns=["Weight"])
 
-        st.write("BMR:",round(bmr,2))
-        st.write("TDEE:",round(tdee,2))
+if not df.empty:
+    st.line_chart(df)
 
-        st.subheader("Diet Plan")
+# ================================
+# Chat with AI
+# ================================
+st.header("💬 Chat with Nutrition Agent")
 
-        st.write(result.content)
+user_input = st.text_input("Ask about nutrition...")
 
-# ======================
-# CHAT
-# ======================
+if user_input:
 
-with tab2:
+    response = qa_chain.run(user_input)
 
-    question=st.text_input("Ask nutrition question")
-
-    if st.button("Ask AI"):
-
-        docs=vectorstore.similarity_search(question,k=2)
-
-        context="\n".join([d.page_content for d in docs])
-
-        prompt=f"""
-        Context:
-        {context}
-
-        Question:
-        {question}
-        """
-
-        result=llm.invoke(prompt)
-
-        st.write(result.content)
+    st.write(response)
