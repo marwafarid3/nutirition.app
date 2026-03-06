@@ -3,38 +3,39 @@ import pandas as pd
 from PIL import Image
 import os
 
-# ================================
-# LangChain Imports (NEW VERSION)
-# ================================
+# =========================
+# LangChain Imports (Stable)
+# =========================
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 from langchain_community.vectorstores import FAISS
-
 from langchain_core.documents import Document
 from langchain_text_splitters import CharacterTextSplitter
 
-from langchain.chains import RetrievalQA
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
 
-# ================================
+# =========================
 # Gemini API KEY
-# ================================
+# =========================
 os.environ["GOOGLE_API_KEY"] = "AIzaSyAFcvpt-Fs_muflBT96HNZbw4c_9Axa0ik"
 
 
-# ================================
+# =========================
 # Load Gemini Model
-# ================================
+# =========================
 llm = ChatGoogleGenerativeAI(
     model="gemini-1.5-flash",
     temperature=0.3
 )
 
 
-# ================================
-# Nutrition Knowledge Base (RAG)
-# ================================
+# =========================
+# Nutrition Knowledge Base
+# =========================
 nutrition_data = [
     "Protein foods include chicken, eggs, fish, beans and yogurt.",
     "Healthy carbohydrates include oats, brown rice and sweet potatoes.",
@@ -42,12 +43,12 @@ nutrition_data = [
     "Weight loss requires a calorie deficit.",
     "Drink at least 2 liters of water daily.",
     "Vegetables are low calorie and rich in nutrients.",
-    "Protein supports muscle growth.",
-    "Avoid processed food and excessive sugar."
+    "Protein helps muscle growth.",
+    "Avoid excessive sugar and processed food."
 ]
 
-docs = [Document(page_content=text) for text in nutrition_data]
 
+docs = [Document(page_content=text) for text in nutrition_data]
 
 splitter = CharacterTextSplitter(
     chunk_size=200,
@@ -57,9 +58,9 @@ splitter = CharacterTextSplitter(
 chunks = splitter.split_documents(docs)
 
 
-# ================================
-# Embeddings + Vector DB
-# ================================
+# =========================
+# Embeddings
+# =========================
 embeddings = GoogleGenerativeAIEmbeddings(
     model="models/embedding-001"
 )
@@ -72,21 +73,42 @@ vectorstore = FAISS.from_documents(
 retriever = vectorstore.as_retriever()
 
 
-qa_chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=retriever
+# =========================
+# RAG Chain (New LangChain)
+# =========================
+prompt = ChatPromptTemplate.from_template(
+"""
+Answer the nutrition question using the context.
+
+Context:
+{context}
+
+Question:
+{question}
+"""
+)
+
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
 )
 
 
-# ================================
+# =========================
 # Streamlit UI
-# ================================
+# =========================
 st.title("🥗 Nutrition AI Agent")
 
 
-# ================================
-# Sidebar Profile
-# ================================
+# =========================
+# User Profile
+# =========================
 st.sidebar.header("User Profile")
 
 weight = st.sidebar.number_input("Weight (kg)", 40, 200)
@@ -99,9 +121,9 @@ goal = st.sidebar.selectbox(
 )
 
 
-# ================================
+# =========================
 # Calories Calculator
-# ================================
+# =========================
 def calculate_calories(weight, height, age):
 
     bmr = 10 * weight + 6.25 * height - 5 * age + 5
@@ -123,10 +145,10 @@ if st.sidebar.button("🔥 Calculate Calories"):
     st.sidebar.success(f"Daily Calories: {calories}")
 
 
-# ================================
+# =========================
 # Diet Plan Generator
-# ================================
-st.header("🥗 Generate Diet Plan")
+# =========================
+st.header("🥗 Diet Plan Generator")
 
 if st.button("Generate Diet Plan"):
 
@@ -150,9 +172,9 @@ if st.button("Generate Diet Plan"):
     st.write(response.content)
 
 
-# ================================
+# =========================
 # Food Image Analysis
-# ================================
+# =========================
 st.header("📷 Food Image Analysis")
 
 uploaded_file = st.file_uploader("Upload food image")
@@ -161,7 +183,7 @@ if uploaded_file:
 
     image = Image.open(uploaded_file)
 
-    st.image(image, caption="Uploaded Food Image")
+    st.image(image)
 
     prompt = "Describe this food and estimate calories."
 
@@ -170,9 +192,9 @@ if uploaded_file:
     st.write(response.content)
 
 
-# ================================
+# =========================
 # Weight Tracker
-# ================================
+# =========================
 st.header("📊 Weight Tracker")
 
 if "weights" not in st.session_state:
@@ -184,29 +206,24 @@ if st.button("Add Weight"):
 
     st.session_state.weights.append(new_weight)
 
-
 df = pd.DataFrame(
     st.session_state.weights,
     columns=["Weight"]
 )
 
 if not df.empty:
-
     st.line_chart(df)
 
 
-# ================================
-# Chat with AI (RAG)
-# ================================
+# =========================
+# Chat with Nutrition AI
+# =========================
 st.header("💬 Chat with Nutrition AI")
 
-user_question = st.text_input(
-    "Ask about nutrition..."
-)
+question = st.text_input("Ask a nutrition question")
 
-if user_question:
+if question:
 
-    answer = qa_chain.run(user_question)
+    answer = rag_chain.invoke(question)
 
     st.write(answer)
-
